@@ -1,8 +1,8 @@
-<!DOCTYPE html>
+    <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Johnny Mnemonic XR Grid + Grab + Panels</title>
+  <title>Johnny Mnemonic XR Grid + Grab + Panels + Movement</title>
   <style>
     body { margin: 0; overflow: hidden; }
     canvas { display: block; }
@@ -19,6 +19,8 @@ let raycaster;
 const tempMatrix = new THREE.Matrix4();
 const grabState = { object: null, controller: null };
 const objects = [];
+const cameraRig = new THREE.Group();
+const moveSpeed = 0.03;
 
 init();
 animate();
@@ -28,6 +30,8 @@ function init() {
   scene.background = new THREE.Color(0x000000);
 
   camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 100);
+  cameraRig.add(camera);
+  scene.add(cameraRig);
 
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -35,18 +39,17 @@ function init() {
   document.body.appendChild(renderer.domElement);
   document.body.appendChild(VRButton.createButton(renderer));
 
-  // Light
   const light = new THREE.HemisphereLight(0xffffff, 0x222222);
   light.position.set(0, 20, 0);
   scene.add(light);
 
-  // Matrix green grid (large tiled plane that follows camera)
-  const gridTexture = new THREE.GridHelper(2000, 400, 0x00ff00, 0x004400);
-  gridTexture.material.opacity = 0.25;
-  gridTexture.material.transparent = true;
-  scene.add(gridTexture);
+  // Green grid that follows the player
+  const grid = new THREE.GridHelper(2000, 400, 0x00ff00, 0x004400);
+  grid.material.opacity = 0.25;
+  grid.material.transparent = true;
+  scene.add(grid);
 
-  // Add cubes
+  // Cubes
   const cubeGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
   for (let i = 0; i < 3; i++) {
     const cubeMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
@@ -56,7 +59,7 @@ function init() {
     objects.push(cube);
   }
 
-  // Add spheres
+  // Spheres
   const sphereGeo = new THREE.SphereGeometry(0.2, 32, 32);
   for (let i = 0; i < 3; i++) {
     const sphereMat = new THREE.MeshStandardMaterial({ color: 0xff6600 });
@@ -66,7 +69,7 @@ function init() {
     objects.push(sphere);
   }
 
-  // Add panels
+  // Data panels
   const panelGeo = new THREE.PlaneGeometry(0.6, 0.3);
   for (let i = 0; i < 3; i++) {
     const canvas = document.createElement('canvas');
@@ -88,7 +91,6 @@ function init() {
     objects.push(panel);
   }
 
-  // Raycaster
   raycaster = new THREE.Raycaster();
 
   // Controllers
@@ -96,8 +98,8 @@ function init() {
   controller2 = renderer.xr.getController(1);
   addPointer(controller1);
   addPointer(controller2);
-  scene.add(controller1);
-  scene.add(controller2);
+  cameraRig.add(controller1);
+  cameraRig.add(controller2);
 
   controller1.addEventListener('selectstart', onSelectStart);
   controller1.addEventListener('selectend', onSelectEnd);
@@ -106,10 +108,10 @@ function init() {
 
   window.addEventListener('resize', onWindowResize);
 
-  // Keep grid centered around camera so it feels endless
   renderer.xr.addEventListener('sessionstart', () => {
     renderer.setAnimationLoop(() => {
-      gridTexture.position.copy(camera.position);
+      grid.position.copy(cameraRig.position);
+      handleMovement();
       renderScene();
     });
   });
@@ -144,10 +146,29 @@ function onSelectStart(event) {
 
 function onSelectEnd(event) {
   if (grabState.object && grabState.controller === event.target) {
-    scene.attach(grabState.object); // release back to scene
+    scene.attach(grabState.object);
     grabState.object = null;
     grabState.controller = null;
   }
+}
+
+function handleMovement() {
+  [controller1, controller2].forEach(controller => {
+    if (!controller.gamepad) return;
+    const [xAxis, yAxis] = controller.gamepad.axes;
+
+    if (Math.abs(xAxis) > 0.1 || Math.abs(yAxis) > 0.1) {
+      // Forward/back relative to headset direction
+      const dir = new THREE.Vector3(0, 0, -1)
+        .applyQuaternion(camera.quaternion)
+        .setY(0)
+        .normalize();
+      const strafe = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
+
+      cameraRig.position.addScaledVector(dir, -yAxis * moveSpeed);
+      cameraRig.position.addScaledVector(strafe, xAxis * moveSpeed);
+    }
+  });
 }
 
 function onWindowResize() {
@@ -166,3 +187,5 @@ function renderScene() {
 </script>
 </body>
 </html>
+
+    
