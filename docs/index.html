@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Johnny Mnemonic WebXR – Grid + Grab + Panels + Flying</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    html, body { margin: 0; height: 100%; background:#000; }
-    canvas { display: block; }
-  </style>
+<meta charset="utf-8" />
+<title>WebXR / Desktop Fly + Grab</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+html, body { margin:0; height:100%; background:#000; overflow:hidden; }
+canvas { display:block; }
+</style>
 </head>
 <body>
 <script type="module">
@@ -18,13 +18,13 @@ let scene, renderer;
 let camera, cameraRig;
 let controllerL, controllerR;
 let raycaster;
-const tempMatrix = new THREE.Matrix4();
 const grabState = { object: null, controller: null };
 const objects = [];
-
-const MOVE_SPEED = 6;      // linear speed
-const VERT_SPEED = 6;      // vertical speed
-const DEADZONE  = 0.12;       // thumbstick deadzone
+const MOVE_SPEED = 0.1;
+const VERT_SPEED = 0.1;
+const keys = { w:false, a:false, s:false, d:false, q:false, e:false };
+let mouseDown=false;
+let prevMouseX=0, prevMouseY=0;
 
 init();
 animate();
@@ -33,231 +33,159 @@ function init() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
 
-  // Player rig (move this, not the camera)
+  // Camera rig
   cameraRig = new THREE.Group();
-  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
   cameraRig.add(camera);
   scene.add(cameraRig);
 
-  // Renderer + WebXR
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  // Renderer
+  renderer = new THREE.WebGLRenderer({ antialias:true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
   document.body.appendChild(renderer.domElement);
   document.body.appendChild(VRButton.createButton(renderer));
 
-  // Lights
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x222222, 1.0);
-  hemi.position.set(0, 20, 0);
+  // Light
+  const hemi = new THREE.HemisphereLight(0xffffff,0x222222,1);
+  hemi.position.set(0,20,0);
   scene.add(hemi);
 
-  // Endless matrix-green grid (recentered to the rig every frame)
+  // Grid
   const grid = new THREE.GridHelper(4000, 800, 0x00ff00, 0x004400);
-  grid.material.transparent = true;
-  grid.material.opacity = 0.25;
+  grid.material.transparent=true;
+  grid.material.opacity=0.25;
   scene.add(grid);
 
-  // --- Objects to grab ---
   // Cubes
-  const cubeGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-  for (let i = 0; i < 3; i++) {
-    const cube = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color: 0x00ffcc }));
-    cube.position.set((Math.random()*2 - 1) * 1.5, 1.4 + Math.random()*0.6, -1.5 - i);
-    scene.add(cube);
-    objects.push(cube);
+  const cubeGeo = new THREE.BoxGeometry(0.3,0.3,0.3);
+  for(let i=0;i<3;i++){
+    const cube=new THREE.Mesh(cubeGeo,new THREE.MeshStandardMaterial({color:0x00ffcc}));
+    cube.position.set((Math.random()*2-1)*1.5,1.4+Math.random()*0.6,-1.5-i);
+    scene.add(cube); objects.push(cube);
   }
 
   // Spheres
-  const sphereGeo = new THREE.SphereGeometry(0.2, 32, 32);
-  for (let i = 0; i < 3; i++) {
-    const sphere = new THREE.Mesh(sphereGeo, new THREE.MeshStandardMaterial({ color: 0xff6600 }));
-    sphere.position.set((Math.random()*2 - 1) * 1.5, 1.4 + Math.random()*0.6, -2.5 - i);
-    scene.add(sphere);
-    objects.push(sphere);
+  const sphereGeo = new THREE.SphereGeometry(0.2,32,32);
+  for(let i=0;i<3;i++){
+    const sphere=new THREE.Mesh(sphereGeo,new THREE.MeshStandardMaterial({color:0xff6600}));
+    sphere.position.set((Math.random()*2-1)*1.5,1.4+Math.random()*0.6,-2.5-i);
+    scene.add(sphere); objects.push(sphere);
   }
 
-  // Data Panels (canvas textures)
-  const panelGeo = new THREE.PlaneGeometry(0.7, 0.35);
-  for (let i = 0; i < 3; i++) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512; canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-
-    // Background
-    ctx.fillStyle = '#001100'; ctx.fillRect(0,0,canvas.width,canvas.height);
-    // Title
-    ctx.fillStyle = '#00ff00';
-    ctx.font = '28px monospace';
-    ctx.fillText(`DATA PANEL ${i+1}`, 24, 56);
-    // Lines
-    ctx.font = '20px monospace';
-    const lines = [
-      `SEQ: ${Math.floor(Math.random()*1e6).toString().padStart(6,'0')}`,
-      `TS : ${new Date().toISOString().slice(11,19)}`,
-      `VAL: ${(Math.random()*100).toFixed(3)}`
-    ];
-    lines.forEach((t, idx) => ctx.fillText(t, 24, 110 + idx*36));
-
-    const texture = new THREE.CanvasTexture(canvas);
-    const mat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: true });
-    const panel = new THREE.Mesh(panelGeo, mat);
-    panel.position.set((Math.random()*2 - 1) * 1.5, 1.6 + Math.random()*0.5, -3.5 - i);
-    // slight tilt
-    panel.rotation.y = (Math.random() - 0.5) * 0.6;
-    scene.add(panel);
-    objects.push(panel);
+  // Panels
+  const panelGeo = new THREE.PlaneGeometry(0.7,0.35);
+  for(let i=0;i<3;i++){
+    const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#001100'; ctx.fillRect(0,0,512,256);
+    ctx.fillStyle='#00ff00'; ctx.font='28px monospace';
+    ctx.fillText(`DATA PANEL ${i+1}`,24,56);
+    ctx.font='20px monospace';
+    const lines = [`SEQ: ${Math.floor(Math.random()*1e6).toString().padStart(6,'0')}`,
+                   `TS : ${new Date().toISOString().slice(11,19)}`,
+                   `VAL: ${(Math.random()*100).toFixed(3)}`];
+    lines.forEach((t,idx)=>ctx.fillText(t,24,110+idx*36));
+    const texture=new THREE.CanvasTexture(canvas);
+    const mat=new THREE.MeshBasicMaterial({map:texture,side:THREE.DoubleSide,transparent:true});
+    const panel=new THREE.Mesh(panelGeo,mat);
+    panel.position.set((Math.random()*2-1)*1.5,1.6+Math.random()*0.5,-3.5-i);
+    panel.rotation.y=(Math.random()-0.5)*0.6;
+    scene.add(panel); objects.push(panel);
   }
 
   // Raycaster
   raycaster = new THREE.Raycaster();
 
-  // Controllers (0 = left, 1 = right in most runtimes)
+  // Controllers
   controllerL = renderer.xr.getController(0);
   controllerR = renderer.xr.getController(1);
   cameraRig.add(controllerL);
   cameraRig.add(controllerR);
 
-  // Pointer rays
-  addPointer(controllerL);
-  addPointer(controllerR);
-
-  // Grab events
-  [controllerL, controllerR].forEach(c => {
-    c.addEventListener('selectstart', onSelectStart);
-    c.addEventListener('selectend', onSelectEnd);
+  [controllerL,controllerR].forEach(c=>{
+    c.addEventListener('selectstart',onSelectStart);
+    c.addEventListener('selectend',onSelectEnd);
   });
 
-  // Keep grid centered so it feels infinite
-  renderer.xr.addEventListener('sessionstart', () => {
-    renderer.setAnimationLoop(() => {
+  renderer.xr.addEventListener('sessionstart',()=>{
+    renderer.setAnimationLoop(()=>{
       grid.position.copy(cameraRig.position);
-      handleMovement(); // poll sticks each frame
+      handleMovement();
       renderScene();
     });
   });
 
-  window.addEventListener('resize', onWindowResize);
+  window.addEventListener('resize',onWindowResize);
+  window.addEventListener('keydown', e => keys[e.key.toLowerCase()]=true);
+  window.addEventListener('keyup', e => keys[e.key.toLowerCase()]=false);
+
+  document.addEventListener('mousedown', e => { mouseDown=true; prevMouseX=e.clientX; prevMouseY=e.clientY; });
+  document.addEventListener('mouseup', ()=>{mouseDown=false;});
+  document.addEventListener('mousemove', e=>{
+    if(mouseDown){
+      const dx=(e.clientX-prevMouseX)/200;
+      const dy=(e.clientY-prevMouseY)/200;
+      cameraRig.rotation.y -= dx;
+      camera.rotation.x -= dy;
+      camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+      prevMouseX=e.clientX; prevMouseY=e.clientY;
+    }
+  });
 }
 
-// ===== Helpers =====
-function addPointer(controller) {
-  const geom = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, 0, -1)
-  ]);
-  const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffff00 }));
-  line.scale.z = 5;
-  controller.add(line);
-}
-
-// Try to read thumbstick axes reliably across runtimes.
-// Returns {x, y} or null if no stick present.
-function getThumbstickAxes(gp, preferLastPair = false) {
-  if (!gp || !gp.axes || gp.axes.length < 2) return null;
-
-  // Common mappings:
-  // - Quest via WebXR: left stick often at indices [2,3], right at [0,1]
-  // - Some browsers swap; sometimes only one pair is valid (non-zero movement)
-  // Strategy: check pairs [2,3], [0,1], then [4,5] if present. Optionally prefer last pair.
-  const candidates = [];
-  if (gp.axes.length >= 4) candidates.push([2,3], [0,1]);
-  else candidates.push([0,1]);
-
-  if (gp.axes.length >= 6) candidates.push([4,5]);
-
-  const order = preferLastPair ? candidates.reverse() : candidates;
-
-  for (const [iX, iY] of order) {
-    const x = gp.axes[iX] ?? 0, y = gp.axes[iY] ?? 0;
-    if (Math.abs(x) > 0.01 || Math.abs(y) > 0.01) return { x, y };
-  }
-  // If nothing is moving, still return the first plausible pair
-  const [iX, iY] = candidates[0];
-  return { x: gp.axes[iX] ?? 0, y: gp.axes[iY] ?? 0 };
-}
-
-// ===== Interaction =====
-function onSelectStart(event) {
-  const controller = event.target;
-
-  tempMatrix.identity().extractRotation(controller.matrixWorld);
+// --- Grabbing ---
+function onSelectStart(event){
+  const controller=event.target;
+  const tempMatrix=new THREE.Matrix4().identity().extractRotation(controller.matrixWorld);
   raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-
-  const hits = rayCasterObjects();
-  if (hits.length > 0) {
-    const picked = hits[0].object;
-    grabState.object = picked;
-    grabState.controller = controller;
+  raycaster.ray.direction.set(0,0,-1).applyMatrix4(tempMatrix);
+  const hits=raycaster.intersectObjects(objects,false);
+  if(hits.length>0){
+    const picked=hits[0].object;
+    grabState.object=picked; grabState.controller=controller;
     controller.attach(picked);
   }
 }
-
-function onSelectEnd(event) {
-  if (grabState.object && grabState.controller === event.target) {
+function onSelectEnd(event){
+  if(grabState.object && grabState.controller===event.target){
     scene.attach(grabState.object);
-    grabState.object = null;
-    grabState.controller = null;
+    grabState.object=null; grabState.controller=null;
   }
 }
 
-function rayCasterObjects() {
-  // update ray from whichever controller called it (set in onSelectStart)
-  return raycaster.intersectObjects(objects, false);
-}
+// --- Movement ---
+function handleMovement(){
+  let dir=new THREE.Vector3();
+  const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
+  const right=new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion).normalize();
 
-// ===== Locomotion (flying) =====
-function handleMovement() {
-  // Left controller: forward/back + strafe using full headset orientation (flying)
-  const gpL = controllerL.gamepad;
-  const leftAxes = getThumbstickAxes(gpL); // {x, y}
-  if (leftAxes) {
-    const x = applyDeadzone(leftAxes.x, DEADZONE);
-    const y = applyDeadzone(leftAxes.y, DEADZONE);
+  if(keys.w) dir.addScaledVector(fwd,MOVE_SPEED);
+  if(keys.s) dir.addScaledVector(fwd,-MOVE_SPEED);
+  if(keys.a) dir.addScaledVector(right,-MOVE_SPEED);
+  if(keys.d) dir.addScaledVector(right,MOVE_SPEED);
+  if(keys.q) dir.y += VERT_SPEED;
+  if(keys.e) dir.y -= VERT_SPEED;
 
-    if (x !== 0 || y !== 0) {
-      // Forward vector: full headset orientation (includes pitch)
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
-      const right   = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+  cameraRig.position.add(dir);
 
-      // Move (note: -y for forward)
-      cameraRig.position.addScaledVector(forward, -y * MOVE_SPEED);
-      cameraRig.position.addScaledVector(right,   x * MOVE_SPEED);
-    }
+  // Controllers flying if headset present
+  const gpL=controllerL.gamepad;
+  if(gpL){ 
+    cameraRig.position.addScaledVector(fwd,-gpL.axes[1]*MOVE_SPEED);
+    cameraRig.position.addScaledVector(right,gpL.axes[0]*MOVE_SPEED);
   }
-
-  // Right controller: vertical up/down on Y (like "ascend/descend")
-  const gpR = controllerR.gamepad;
-  const rightAxes = getThumbstickAxes(gpR, true);
-  if (rightAxes) {
-    const y = applyDeadzone(rightAxes.y, DEADZONE);
-    if (y !== 0) {
-      cameraRig.position.y += -y * VERT_SPEED; // push stick up to go up
-    }
-  }
+  const gpR=controllerR.gamepad;
+  if(gpR){ cameraRig.position.y += -gpR.axes[1]*VERT_SPEED; }
 }
 
-function applyDeadzone(value, dz) {
-  return Math.abs(value) < dz ? 0 : value;
-}
-
-// ===== Boilerplate =====
-function onWindowResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
+function onWindowResize(){
+  camera.aspect=window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(window.innerWidth,window.innerHeight);
 }
-
-function animate() {
-  renderer.setAnimationLoop(renderScene);
-}
-
-function renderScene() {
-  renderer.render(scene, camera);
-}
+function animate(){renderer.setAnimationLoop(renderScene);}
+function renderScene(){renderer.render(scene,camera);}
 </script>
 </body>
 </html>
-
-  
-    
