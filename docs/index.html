@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Johnny Mnemonic Style XR Controller Demo</title>
+  <title>Johnny Mnemonic XR Grid + Grab + Panels</title>
   <style>
     body { margin: 0; overflow: hidden; }
     canvas { display: block; }
@@ -13,22 +13,22 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.163/build/three.module.js';
 import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.163/examples/jsm/webxr/VRButton.js';
 
-let scene, camera, renderer, cube;
+let scene, camera, renderer;
 let controller1, controller2;
+let raycaster;
+const tempMatrix = new THREE.Matrix4();
+const grabState = { object: null, controller: null };
+const objects = [];
 
 init();
 animate();
 
 function init() {
-  // Scene
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
 
-  // Camera
-  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.z = 3;
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 100);
 
-  // Renderer
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.xr.enabled = true;
@@ -36,49 +36,118 @@ function init() {
   document.body.appendChild(VRButton.createButton(renderer));
 
   // Light
-  const light = new THREE.HemisphereLight(0xffffff, 0x444444);
+  const light = new THREE.HemisphereLight(0xffffff, 0x222222);
   light.position.set(0, 20, 0);
   scene.add(light);
 
-  // Test cube
-  const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-  const material = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
-  cube = new THREE.Mesh(geometry, material);
-  cube.position.set(0, 1.5, -2);
-  scene.add(cube);
+  // Matrix green grid (large tiled plane that follows camera)
+  const gridTexture = new THREE.GridHelper(2000, 400, 0x00ff00, 0x004400);
+  gridTexture.material.opacity = 0.25;
+  gridTexture.material.transparent = true;
+  scene.add(gridTexture);
+
+  // Add cubes
+  const cubeGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+  for (let i = 0; i < 3; i++) {
+    const cubeMat = new THREE.MeshStandardMaterial({ color: 0x00ffcc });
+    const cube = new THREE.Mesh(cubeGeo, cubeMat);
+    cube.position.set(Math.random() * 2 - 1, 1.5, -1.5 - i);
+    scene.add(cube);
+    objects.push(cube);
+  }
+
+  // Add spheres
+  const sphereGeo = new THREE.SphereGeometry(0.2, 32, 32);
+  for (let i = 0; i < 3; i++) {
+    const sphereMat = new THREE.MeshStandardMaterial({ color: 0xff6600 });
+    const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+    sphere.position.set(Math.random() * 2 - 1, 1.5, -2.5 - i);
+    scene.add(sphere);
+    objects.push(sphere);
+  }
+
+  // Add panels
+  const panelGeo = new THREE.PlaneGeometry(0.6, 0.3);
+  for (let i = 0; i < 3; i++) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#001100';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#00ff00';
+    ctx.font = '20px monospace';
+    ctx.fillText(`Data Panel ${i+1}`, 10, 40);
+    ctx.fillText(`Feed line ${Math.floor(Math.random()*100)}`, 10, 80);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const panelMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    panel.position.set(Math.random() * 2 - 1, 1.5, -3.5 - i);
+    scene.add(panel);
+    objects.push(panel);
+  }
+
+  // Raycaster
+  raycaster = new THREE.Raycaster();
 
   // Controllers
   controller1 = renderer.xr.getController(0);
   controller2 = renderer.xr.getController(1);
-
-  // Visual indicator for controllers
-  const controllerGeometry = new THREE.SphereGeometry(0.02, 16, 16);
-  const controllerMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-  const controllerMesh1 = new THREE.Mesh(controllerGeometry, controllerMaterial);
-  const controllerMesh2 = new THREE.Mesh(controllerGeometry, controllerMaterial.clone());
-
-  controller1.add(controllerMesh1);
-  controller2.add(controllerMesh2);
+  addPointer(controller1);
+  addPointer(controller2);
   scene.add(controller1);
   scene.add(controller2);
 
-  // Simple event logging
   controller1.addEventListener('selectstart', onSelectStart);
   controller1.addEventListener('selectend', onSelectEnd);
   controller2.addEventListener('selectstart', onSelectStart);
   controller2.addEventListener('selectend', onSelectEnd);
 
   window.addEventListener('resize', onWindowResize);
+
+  // Keep grid centered around camera so it feels endless
+  renderer.xr.addEventListener('sessionstart', () => {
+    renderer.setAnimationLoop(() => {
+      gridTexture.position.copy(camera.position);
+      renderScene();
+    });
+  });
+}
+
+function addPointer(controller) {
+  const geometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -1)
+  ]);
+  const material = new THREE.LineBasicMaterial({ color: 0xffff00 });
+  const line = new THREE.Line(geometry, material);
+  line.scale.z = 5;
+  controller.add(line.clone());
 }
 
 function onSelectStart(event) {
-  console.log('Select started on controller', event.target);
-  cube.material.color.set(0xff0000); // flash cube red
+  const controller = event.target;
+
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+  const intersects = raycaster.intersectObjects(objects);
+  if (intersects.length > 0) {
+    const picked = intersects[0].object;
+    grabState.object = picked;
+    grabState.controller = controller;
+    controller.attach(picked);
+  }
 }
 
 function onSelectEnd(event) {
-  console.log('Select ended on controller', event.target);
-  cube.material.color.set(0x00ffcc); // back to original color
+  if (grabState.object && grabState.controller === event.target) {
+    scene.attach(grabState.object); // release back to scene
+    grabState.object = null;
+    grabState.controller = null;
+  }
 }
 
 function onWindowResize() {
@@ -92,8 +161,6 @@ function animate() {
 }
 
 function renderScene() {
-  cube.rotation.x += 0.01;
-  cube.rotation.y += 0.01;
   renderer.render(scene, camera);
 }
 </script>
